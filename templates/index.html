@@ -23,7 +23,9 @@
             <button type="submit" class="btn btn-primary">搜索</button>
         </form>
 
-        {% if search_keyword %}
+        {% if search_error %}
+            <p class="error-message">{{ search_error }}</p>
+        {% elif search_keyword %}
             {% if search_results %}
                 <table class="search-table">
                     <thead>

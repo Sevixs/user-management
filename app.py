@@ -93,6 +93,40 @@ def sanitize_input(text):
     return text
 
 
+def validate_sql_input(text, field_type="text"):
+    """校验用户输入，拦截 SQL 注入危险字符，并做格式白名单校验。
+
+    拦截项：单引号 ' 、双引号 " 、分号 ; 、注释符 -- 和 /* 、
+           反斜杠 \\ 、backtick ` 、括号 ( ) 等 SQL 特殊字符。
+    格式校验：username 仅允许字母、数字、下划线、@、点、横线；
+             email 仅允许合法邮箱字符；
+             phone 仅允许数字、横线、加号。
+    """
+    if not text:
+        return True, ""
+
+    # SQL 危险字符黑名单
+    dangerous = re.search(r"['\"\;\-\-/\*\\\`\(\)]", text)
+    if dangerous:
+        return False, "输入包含非法 SQL 字符"
+
+    # 格式白名单校验
+    if field_type == "username":
+        if not re.match(r"^[a-zA-Z0-9_@.\-]+$", text):
+            return False, "用户名只能包含字母、数字、下划线、@、点、横线"
+    elif field_type == "email":
+        if text and not re.match(r"^[a-zA-Z0-9_@.\-]+$", text):
+            return False, "邮箱格式不合法"
+    elif field_type == "phone":
+        if text and not re.match(r"^[\d\+\-]+$", text):
+            return False, "手机号只能包含数字、横线、加号"
+    elif field_type == "keyword":
+        if len(text) > 100:
+            return False, "搜索关键词过长"
+
+    return True, ""
+
+
 def mask_phone(phone):
     """脱敏手机号：138****8000"""
     if not phone or len(phone) < 7:
@@ -247,7 +281,7 @@ def register():
     """注册页面。
 
     GET  ：返回注册表单。
-    POST ：将用户数据以 f-string 拼接方式插入 SQLite 数据库。
+    POST ：使用参数化预编译查询将用户数据插入 SQLite 数据库。
     """
     if request.method == "POST":
         username = request.form.get("username", "")
@@ -255,20 +289,37 @@ def register():
         email = request.form.get("email", "")
         phone = request.form.get("phone", "")
 
-        # 注意：故意使用 f-string 拼接 SQL（存在 SQL 注入风险，仅用于教学演示）
-        sql = f"INSERT INTO users (username, password, email, phone) VALUES ('{username}', '{password}', '{email}', '{phone}')"
-        print(f"[SQL] 注册 - 执行的 SQL: {sql}")
+        # ---------------------------------------------------------------
+        # 安全校验：SQL 危险字符拦截 + 格式白名单校验
+        # ---------------------------------------------------------------
+        valid, msg = validate_sql_input(username, "username")
+        if not valid:
+            return render_template("register.html", error=msg)
+        valid, msg = validate_sql_input(email, "email")
+        if not valid:
+            return render_template("register.html", error=msg)
+        valid, msg = validate_sql_input(phone, "phone")
+        if not valid:
+            return render_template("register.html", error=msg)
+
+        # ---------------------------------------------------------------
+        # 修复：使用参数化预编译查询（? 占位符），彻底杜绝 SQL 注入
+        # ---------------------------------------------------------------
+        sql = "INSERT INTO users (username, password, email, phone) VALUES (?, ?, ?, ?)"
+        print(f"[SQL] 注册 - 预编译语句: {sql} | 参数: ({username}, ***, {email}, {phone})")
 
         try:
             conn = sqlite3.connect("data/users.db")
             c = conn.cursor()
-            c.execute(sql)
+            c.execute(sql, (username, password, email, phone))
             conn.commit()
             conn.close()
             return redirect(url_for("login", registered="success"))
+        except sqlite3.IntegrityError:
+            return render_template("register.html", error="用户名已存在")
         except Exception as e:
             print(f"[SQL ERROR] 注册失败: {e}")
-            return render_template("register.html", error=f"注册失败：{e}")
+            return render_template("register.html", error="注册失败，请稍后重试")
 
     return render_template("register.html")
 
@@ -282,20 +333,41 @@ def search():
     """搜索用户。
 
     通过 URL 参数 keyword 接收关键词，
-    使用 f-string 拼接 SQL 查询（存在 SQL 注入风险，仅用于教学演示）。
+    使用参数化预编译查询进行模糊匹配，杜绝 SQL 注入风险。
     """
     keyword = request.args.get("keyword", "")
     results = []
 
     if keyword:
-        # 注意：故意使用 f-string 拼接 SQL（存在 SQL 注入风险，仅用于教学演示）
-        sql = f"SELECT id, username, email, phone FROM users WHERE username LIKE '%{keyword}%' OR email LIKE '%{keyword}%'"
-        print(f"[SQL] 搜索 - 执行的 SQL: {sql}")
+        # ---------------------------------------------------------------
+        # 安全校验：SQL 危险字符拦截
+        # ---------------------------------------------------------------
+        valid, msg = validate_sql_input(keyword, "keyword")
+        if not valid:
+            username = session.get("username")
+            user_info = None
+            if username and username in USERS:
+                user_info = sanitize_user_info(USERS[username])
+            return render_template(
+                "index.html",
+                username=username,
+                user=user_info,
+                search_results=[],
+                search_keyword=keyword,
+                search_error=msg,
+            )
+
+        # ---------------------------------------------------------------
+        # 修复：使用参数化预编译查询（? 占位符），彻底杜绝 SQL 注入
+        # ---------------------------------------------------------------
+        like_pattern = f"%{keyword}%"
+        sql = "SELECT id, username, email, phone FROM users WHERE username LIKE ? OR email LIKE ?"
+        print(f"[SQL] 搜索 - 预编译语句: {sql} | 参数: ('%{keyword}%')")
 
         try:
             conn = sqlite3.connect("data/users.db")
             c = conn.cursor()
-            c.execute(sql)
+            c.execute(sql, (like_pattern, like_pattern))
             rows = c.fetchall()
             conn.close()
             results = [{"id": r[0], "username": r[1], "email": r[2], "phone": r[3]} for r in rows]
