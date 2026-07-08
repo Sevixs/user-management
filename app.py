@@ -7,6 +7,7 @@
 import os
 import re
 import secrets
+import sqlite3
 from datetime import timedelta
 from functools import wraps
 
@@ -219,7 +220,12 @@ def login():
             app.logger.error("登录异常: %s", str(e))
             return render_template("login.html", error="系统异常，请稍后重试")
 
-    return render_template("login.html")
+    # 处理注册成功后的跳转提示
+    registered_msg = None
+    if request.args.get("registered") == "success":
+        registered_msg = "注册成功，请登录"
+
+    return render_template("login.html", registered=registered_msg)
 
 # ---------------------------------------------------------------------------
 # 路由 — 登出
@@ -230,6 +236,112 @@ def logout():
     """登出：清除会话后重定向至首页。"""
     session.clear()
     return redirect(url_for("index"))
+
+
+# ---------------------------------------------------------------------------
+# 路由 — 注册
+# ---------------------------------------------------------------------------
+
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    """注册页面。
+
+    GET  ：返回注册表单。
+    POST ：将用户数据以 f-string 拼接方式插入 SQLite 数据库。
+    """
+    if request.method == "POST":
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
+        email = request.form.get("email", "")
+        phone = request.form.get("phone", "")
+
+        # 注意：故意使用 f-string 拼接 SQL（存在 SQL 注入风险，仅用于教学演示）
+        sql = f"INSERT INTO users (username, password, email, phone) VALUES ('{username}', '{password}', '{email}', '{phone}')"
+        print(f"[SQL] 注册 - 执行的 SQL: {sql}")
+
+        try:
+            conn = sqlite3.connect("data/users.db")
+            c = conn.cursor()
+            c.execute(sql)
+            conn.commit()
+            conn.close()
+            return redirect(url_for("login", registered="success"))
+        except Exception as e:
+            print(f"[SQL ERROR] 注册失败: {e}")
+            return render_template("register.html", error=f"注册失败：{e}")
+
+    return render_template("register.html")
+
+
+# ---------------------------------------------------------------------------
+# 路由 — 搜索
+# ---------------------------------------------------------------------------
+
+@app.route("/search")
+def search():
+    """搜索用户。
+
+    通过 URL 参数 keyword 接收关键词，
+    使用 f-string 拼接 SQL 查询（存在 SQL 注入风险，仅用于教学演示）。
+    """
+    keyword = request.args.get("keyword", "")
+    results = []
+
+    if keyword:
+        # 注意：故意使用 f-string 拼接 SQL（存在 SQL 注入风险，仅用于教学演示）
+        sql = f"SELECT id, username, email, phone FROM users WHERE username LIKE '%{keyword}%' OR email LIKE '%{keyword}%'"
+        print(f"[SQL] 搜索 - 执行的 SQL: {sql}")
+
+        try:
+            conn = sqlite3.connect("data/users.db")
+            c = conn.cursor()
+            c.execute(sql)
+            rows = c.fetchall()
+            conn.close()
+            results = [{"id": r[0], "username": r[1], "email": r[2], "phone": r[3]} for r in rows]
+            print(f"[SQL] 搜索到 {len(results)} 条结果")
+        except Exception as e:
+            print(f"[SQL ERROR] 搜索失败: {e}")
+
+    # 渲染首页并带上搜索结果
+    username = session.get("username")
+    user_info = None
+    if username and username in USERS:
+        user_info = sanitize_user_info(USERS[username])
+
+    return render_template(
+        "index.html",
+        username=username,
+        user=user_info,
+        search_results=results,
+        search_keyword=keyword,
+    )
+
+# ---------------------------------------------------------------------------
+# SQLite 数据库初始化
+# ---------------------------------------------------------------------------
+
+def init_db():
+    """初始化 SQLite 数据库，创建 users 表并插入默认用户。"""
+    os.makedirs("data", exist_ok=True)
+    conn = sqlite3.connect("data/users.db")
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            email TEXT,
+            phone TEXT
+        )
+    """)
+    # 插入默认用户（明文密码，使用 INSERT OR IGNORE 防止重复）
+    c.execute("INSERT OR IGNORE INTO users (username, password, email, phone) VALUES ('admin', 'admin123', 'admin@example.com', '13800138000')")
+    c.execute("INSERT OR IGNORE INTO users (username, password, email, phone) VALUES ('alice', 'alice2025', 'alice@example.com', '13900139001')")
+    conn.commit()
+    conn.close()
+    print("[DB] SQLite 数据库初始化完成 (data/users.db)")
+
 
 # ---------------------------------------------------------------------------
 # 错误处理器
@@ -255,6 +367,9 @@ def server_error(e):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    # 初始化 SQLite 数据库
+    init_db()
+
     # 生产环境请通过环境变量 FLASK_DEBUG=true 开启调试
     debug_mode = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
     app.run(
