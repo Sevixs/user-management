@@ -12,7 +12,10 @@
                 <li><span class="info-label">余额：</span>{{ user.balance }}</li>
             </ul>
         </div>
-        <a href="{{ url_for('logout') }}" class="btn btn-danger">退出登录</a>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            <a href="{{ url_for('logout') }}" class="btn btn-danger">退出登录</a>
+            <a href="{{ url_for('upload') }}" class="btn btn-primary">上传头像</a>
+        </div>
     </div>
 
     <div class="card">

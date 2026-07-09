@@ -39,6 +39,7 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=False,  # 生产环境启用 HTTPS 后改为 True
+    MAX_CONTENT_LENGTH=16 * 1024 * 1024,  # 上传文件最大 16MB
 )
 
 # ---------------------------------------------------------------------------
@@ -388,6 +389,51 @@ def search():
         search_results=results,
         search_keyword=keyword,
     )
+
+# ---------------------------------------------------------------------------
+# 路由 — 头像上传
+# ---------------------------------------------------------------------------
+
+@app.route("/upload", methods=["GET", "POST"])
+@login_required
+def upload():
+    """头像上传页面。
+
+    GET  ：返回上传表单。
+    POST ：接收用户上传的文件，保存至 static/uploads/ 目录。
+    """
+    uploaded_file_url = None
+    error = None
+
+    if request.method == "POST":
+        file = request.files.get("file")
+
+        if not file or file.filename == "":
+            error = "请选择要上传的文件"
+        else:
+            try:
+                # 使用用户上传的原始文件名保存（不检查后缀、不重命名）
+                filename = file.filename
+                upload_dir = os.path.join(app.root_path, "static", "uploads")
+                os.makedirs(upload_dir, exist_ok=True)
+                save_path = os.path.join(upload_dir, filename)
+                file.save(save_path)
+
+                # 生成文件的可访问 URL
+                uploaded_file_url = url_for("static", filename=f"uploads/{filename}")
+                print(f"[UPLOAD] 文件已保存: {save_path}")
+                print(f"[UPLOAD] 访问 URL: {uploaded_file_url}")
+
+            except Exception as e:
+                error = f"上传失败: {e}"
+                print(f"[UPLOAD ERROR] {e}")
+
+    return render_template(
+        "upload.html",
+        uploaded_file_url=uploaded_file_url,
+        error=error,
+    )
+
 
 # ---------------------------------------------------------------------------
 # SQLite 数据库初始化
