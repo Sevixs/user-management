@@ -7,7 +7,7 @@
 
         <div class="form-group">
             <label for="file">选择文件</label>
-            <input type="file" id="file" name="file" class="form-input" required>
+            <input type="file" id="file" name="file" class="form-input" accept="image/jpeg,image/png,image/gif" required>
         </div>
 
         {% if error %}
@@ -19,7 +19,13 @@
 
     {% if uploaded_file_url %}
         <div class="upload-result" style="margin-top: 20px; text-align: center;">
-            <p class="success-message" style="margin-bottom: 12px;">上传成功！</p>
+            <p class="success-message" style="margin-bottom: 12px;">
+                {% if display_filename %}
+                    文件 {{ display_filename }} 上传成功！
+                {% else %}
+                    上传成功！
+                {% endif %}
+            </p>
             <img src="{{ uploaded_file_url }}" alt="上传的头像"
                  style="max-width: 200px; max-height: 200px; border-radius: 8px;
                         border: 2px solid #e0e0e0; padding: 4px;">

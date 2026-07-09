@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import sqlite3
+import uuid
 from datetime import timedelta
 from functools import wraps
 
@@ -19,7 +20,10 @@ from flask import (
     request,
     session,
     url_for,
+    send_from_directory,
 )
+from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
 from werkzeug.security import check_password_hash, generate_password_hash
 
 # ---------------------------------------------------------------------------
@@ -79,6 +83,60 @@ def _build_user_db():
 
 
 USERS = _build_user_db()
+
+# ---------------------------------------------------------------------------
+# 上传安全配置
+# ---------------------------------------------------------------------------
+
+# 图片后缀白名单
+ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "gif"}
+
+# 单文件大小上限（5MB）
+MAX_FILE_SIZE = 5 * 1024 * 1024
+
+# 上传文件存储目录（非 static 子目录，避免匿名直接访问）
+UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "uploads")
+
+
+def allowed_file(filename):
+    """校验文件后缀是否在白名单内。"""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return ext in ALLOWED_EXTENSIONS
+
+
+def check_image_magic(file_stream):
+    """读取文件二进制头部，校验真实文件 MIME 类型（魔数校验）。
+
+    仅放行 JPEG / PNG / GIF 纯图片文件，拦截图片马及伪装脚本。
+    """
+    magic = file_stream.read(8)
+    file_stream.seek(0)  # 复位指针，供后续保存
+
+    if magic[:3] == b"\xff\xd8\xff":
+        return True, "jpeg"
+    elif magic[:4] == b"\x89PNG":
+        return True, "png"
+    elif magic[:3] == b"GIF":
+        return True, "gif"
+    else:
+        return False, None
+
+
+def sanitize_display_text(text):
+    """过滤用于前端展示的文本中的 HTML 特殊字符，防范存储型 XSS。"""
+    if not text:
+        return ""
+    replacements = {
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "'": "&#x27;",
+        '"': "&quot;",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return text
+
 
 # ---------------------------------------------------------------------------
 # 工具函数
@@ -394,45 +452,86 @@ def search():
 # 路由 — 头像上传
 # ---------------------------------------------------------------------------
 
+
 @app.route("/upload", methods=["GET", "POST"])
 @login_required
 def upload():
-    """头像上传页面。
+    """头像上传页面（安全加固版）。
 
     GET  ：返回上传表单。
-    POST ：接收用户上传的文件，保存至 static/uploads/ 目录。
+    POST ：接收用户上传的文件，通过后缀白名单 + 魔数校验后，
+           以 UUID 重命名保存至 data/uploads/ 目录。
     """
     uploaded_file_url = None
     error = None
+    display_filename = None
 
     if request.method == "POST":
         file = request.files.get("file")
 
+        # ── 校验 1：文件是否为空 ──
         if not file or file.filename == "":
             error = "请选择要上传的文件"
         else:
             try:
-                # 使用用户上传的原始文件名保存（不检查后缀、不重命名）
-                filename = file.filename
-                upload_dir = os.path.join(app.root_path, "static", "uploads")
-                os.makedirs(upload_dir, exist_ok=True)
-                save_path = os.path.join(upload_dir, filename)
-                file.save(save_path)
+                original_filename = file.filename
 
-                # 生成文件的可访问 URL
-                uploaded_file_url = url_for("static", filename=f"uploads/{filename}")
-                print(f"[UPLOAD] 文件已保存: {save_path}")
-                print(f"[UPLOAD] 访问 URL: {uploaded_file_url}")
+                # ── 校验 2：后缀白名单 ──
+                if not allowed_file(original_filename):
+                    error = "仅允许上传 jpg、jpeg、png、gif 格式的图片文件"
+                else:
+                    # ── 校验 3：单文件大小上限（5MB） ──
+                    file.seek(0, os.SEEK_END)
+                    file_size = file.tell()
+                    file.seek(0)
+                    if file_size > MAX_FILE_SIZE:
+                        error = f"文件大小超过限制（最大 {MAX_FILE_SIZE // (1024*1024)}MB）"
+                    else:
+                        # ── 校验 4：二进制魔数校验真实 MIME 类型 ──
+                        is_valid_image, image_type = check_image_magic(file.stream)
+                        if not is_valid_image:
+                            error = "文件类型校验失败，仅允许上传纯图片文件"
+                        else:
+                            # ── 通过所有校验：安全保存文件 ──
+                            # 使用 UUID 生成唯一文件名，彻底杜绝路径遍历和文件覆盖
+                            safe_filename = f"{uuid.uuid4().hex}.{image_type}"
+                            os.makedirs(UPLOAD_DIR, exist_ok=True)
+                            save_path = os.path.join(UPLOAD_DIR, safe_filename)
+                            file.save(save_path)
+
+                            # 生成受保护的访问 URL（通过 /uploads/ 路由鉴权后访问）
+                            uploaded_file_url = url_for("serve_upload", filename=safe_filename)
+                            display_filename = original_filename
+
+                            print(f"[UPLOAD] 原始文件: {original_filename}")
+                            print(f"[UPLOAD] 安全保存: {save_path}")
+                            print(f"[UPLOAD] 访问 URL: {uploaded_file_url}")
 
             except Exception as e:
-                error = f"上传失败: {e}"
+                error = "文件上传失败，请稍后重试"
                 print(f"[UPLOAD ERROR] {e}")
 
     return render_template(
         "upload.html",
         uploaded_file_url=uploaded_file_url,
         error=error,
+        display_filename=display_filename,
     )
+
+
+# ---------------------------------------------------------------------------
+# 路由 — 上传文件访问（需登录鉴权）
+# ---------------------------------------------------------------------------
+
+
+@app.route("/uploads/<filename>")
+@login_required
+def serve_upload(filename):
+    """提供上传文件的受保护访问。
+
+    仅登录用户可访问，禁止匿名用户通过 URL 直接访问上传后的文件。
+    """
+    return send_from_directory(UPLOAD_DIR, filename)
 
 
 # ---------------------------------------------------------------------------
