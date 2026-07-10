@@ -9,8 +9,10 @@ import re
 import secrets
 import sqlite3
 import uuid
+import time
 from datetime import timedelta
 from functools import wraps
+from collections import defaultdict
 
 from flask import (
     Flask,
@@ -95,6 +97,26 @@ MAX_FILE_SIZE = 5 * 1024 * 1024
 
 # 上传文件存储目录（非 static 子目录，避免匿名直接访问）
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "uploads")
+
+# ---------- 充值安全配置 ----------
+MAX_RECHARGE_AMOUNT = 10000  # 单次充值上限
+
+# ---------- 频率限制 ----------
+_rate_limit_store = defaultdict(list)
+RATE_LIMIT_WINDOW = 10       # 10 秒窗口
+RATE_LIMIT_MAX = 10           # 窗口内最多 10 次请求
+
+
+def check_rate_limit(key_prefix):
+    """简易内存频率限制，防止接口被批量遍历。"""
+    now = time.time()
+    key = f"{key_prefix}:{request.remote_addr}"
+    records = _rate_limit_store[key]
+    _rate_limit_store[key] = [t for t in records if now - t < RATE_LIMIT_WINDOW]
+    if len(_rate_limit_store[key]) >= RATE_LIMIT_MAX:
+        return False
+    _rate_limit_store[key].append(now)
+    return True
 
 
 def allowed_file(filename):
@@ -296,7 +318,6 @@ def login():
                 session.clear()
                 session.permanent = True
                 session["username"] = username
-                session["user_id"] = get_user_id_by_username(username)
                 session["csrf_token"] = secrets.token_hex(32)
 
                 user_info = sanitize_user_info(user_record)
@@ -535,97 +556,115 @@ def serve_upload(filename):
 
 
 # ---------------------------------------------------------------------------
-# 工具函数 — 用户 ID 映射
-# ---------------------------------------------------------------------------
-
-# 将 USERS 字典的键映射为数字 ID（1=admin, 2=alice, ...）
-_USER_ID_MAP = {idx + 1: username for idx, username in enumerate(USERS.keys())}
-_USER_ID_REVERSE = {username: idx + 1 for idx, username in enumerate(USERS.keys())}
-
-
-def get_user_by_id(user_id):
-    """根据数字 ID 获取用户信息。"""
-    username = _USER_ID_MAP.get(user_id)
-    if username and username in USERS:
-        return username, USERS[username]
-    return None, None
-
-
-def get_user_id_by_username(username):
-    """根据用户名获取数字 ID。"""
-    return _USER_ID_REVERSE.get(username)
-
-
-# ---------------------------------------------------------------------------
-# 路由 — 个人中心
+# 路由 — 个人中心（安全加固版）
 # ---------------------------------------------------------------------------
 
 
 @app.route("/profile")
+@login_required
 def profile():
-    """个人中心页面。
+    """个人中心 — 仅展示当前登录用户自身信息。
 
-    从 URL 参数获取 user_id，展示该用户的完整信息（邮箱、手机、余额）。
-    不验证当前登录用户和查询的 user_id 是否匹配。
+    安全加固：
+    1. 用户身份强制从 session 读取，废弃 URL 参数 user_id
+    2. 不存在越权查看他人资料问题
+    3. 频率限制防批量遍历
     """
-    error = None
-    try:
-        user_id = int(request.args.get("user_id", 0))
-    except (TypeError, ValueError):
-        user_id = 0
+    if not check_rate_limit("profile"):
+        return render_template("profile.html", error="请求过于频繁，请稍后重试",
+                               profile_user=None)
 
-    username, user_data = get_user_by_id(user_id)
+    username = session.get("username")
+    user_data = USERS.get(username)
 
-    if not username or not user_data:
-        error = "用户不存在"
-        return render_template("profile.html", error=error, profile_user=None, user_id=None)
+    if not user_data:
+        return render_template("profile.html", error="用户信息加载失败",
+                               profile_user=None)
 
     profile_user = {
-        "id": user_id,
         "username": user_data.get("username"),
+        "role": user_data.get("role"),
         "email": user_data.get("email"),
         "phone": user_data.get("phone"),
         "balance": mask_balance(user_data.get("balance", 0)),
     }
 
-    return render_template(
-        "profile.html",
-        profile_user=profile_user,
-        user_id=user_id,
-        error=error,
-    )
+    return render_template("profile.html", profile_user=profile_user, error=None)
 
 
 # ---------------------------------------------------------------------------
-# 路由 — 充值
+# 路由 — 充值（安全加固版）
 # ---------------------------------------------------------------------------
 
 
 @app.route("/recharge", methods=["POST"])
 @login_required
 def recharge():
-    """充值接口。
+    """充值接口 — 仅操作当前登录用户自身余额。
 
-    从表单接收 user_id 和 amount 参数，
-    直接修改用户数据中的余额字段（不做正负校验）。
+    安全加固：
+    1. 目标用户强制从 session 读取，废弃表单 user_id
+    2. amount 仅允许大于 0 且不超过上限的合法数字
+    3. 频率限制防批量遍历
     """
-    try:
-        user_id = int(request.form.get("user_id", 0))
-        amount = float(request.form.get("amount", 0))
-    except (TypeError, ValueError):
-        user_id = 0
-        amount = 0
+    if not check_rate_limit("recharge"):
+        return render_template("profile.html", error="请求过于频繁，请稍后重试",
+                               profile_user=_get_self_profile_user())
 
-    username, user_data = get_user_by_id(user_id)
+    username = session.get("username")
+    user_data = USERS.get(username)
 
-    if not username or not user_data:
-        return redirect(url_for("profile", user_id=user_id))
+    if not user_data:
+        return render_template("profile.html", error="用户信息加载失败",
+                               profile_user=None)
 
-    # 直接修改余额，不做正负校验
+    # amount 严格校验：必须为纯数字（最多两位小数）
+    amount_str = request.form.get("amount", "").strip()
+
+    if not amount_str:
+        return render_template("profile.html",
+                               error="请输入充值金额",
+                               profile_user=_get_self_profile_user())
+
+    # 拦截非数字格式（字母、特殊符号、SQL注入字符等）
+    if not re.match(r"^[0-9]+(\.[0-9]{1,2})?$", amount_str):
+        return render_template("profile.html",
+                               error="充值金额不合法",
+                               profile_user=_get_self_profile_user())
+
+    amount = float(amount_str)
+
+    # 拦截负数、零
+    if amount <= 0:
+        return render_template("profile.html",
+                               error="充值金额必须大于 0",
+                               profile_user=_get_self_profile_user())
+
+    if amount > MAX_RECHARGE_AMOUNT:
+        return render_template("profile.html",
+                               error=f"单次充值金额不能超过 {MAX_RECHARGE_AMOUNT} 元",
+                               profile_user=_get_self_profile_user())
+
+    # 执行充值
     user_data["balance"] = user_data.get("balance", 0) + amount
-    print(f"[RECHARGE] 用户 {username} 充值 {amount}，余额变为 {user_data['balance']}")
+    print(f"[RECHARGE] 用户 {username} 充值 {amount} 元，余额 {user_data['balance']}")
 
-    return redirect(url_for("profile", user_id=user_id))
+    return redirect(url_for("profile"))
+
+
+def _get_self_profile_user():
+    """辅助函数：获取当前登录用户的 profile 展示数据。"""
+    username = session.get("username")
+    user_data = USERS.get(username)
+    if not username or not user_data:
+        return None
+    return {
+        "username": user_data.get("username"),
+        "role": user_data.get("role"),
+        "email": user_data.get("email"),
+        "phone": user_data.get("phone"),
+        "balance": mask_balance(user_data.get("balance", 0)),
+    }
 
 
 # ---------------------------------------------------------------------------
