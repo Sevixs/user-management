@@ -24,7 +24,6 @@ from flask import (
 )
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
-from werkzeug.security import check_password_hash, generate_password_hash
 
 # ---------------------------------------------------------------------------
 # 应用初始化
@@ -297,6 +296,7 @@ def login():
                 session.clear()
                 session.permanent = True
                 session["username"] = username
+                session["user_id"] = get_user_id_by_username(username)
                 session["csrf_token"] = secrets.token_hex(32)
 
                 user_info = sanitize_user_info(user_record)
@@ -532,6 +532,100 @@ def serve_upload(filename):
     仅登录用户可访问，禁止匿名用户通过 URL 直接访问上传后的文件。
     """
     return send_from_directory(UPLOAD_DIR, filename)
+
+
+# ---------------------------------------------------------------------------
+# 工具函数 — 用户 ID 映射
+# ---------------------------------------------------------------------------
+
+# 将 USERS 字典的键映射为数字 ID（1=admin, 2=alice, ...）
+_USER_ID_MAP = {idx + 1: username for idx, username in enumerate(USERS.keys())}
+_USER_ID_REVERSE = {username: idx + 1 for idx, username in enumerate(USERS.keys())}
+
+
+def get_user_by_id(user_id):
+    """根据数字 ID 获取用户信息。"""
+    username = _USER_ID_MAP.get(user_id)
+    if username and username in USERS:
+        return username, USERS[username]
+    return None, None
+
+
+def get_user_id_by_username(username):
+    """根据用户名获取数字 ID。"""
+    return _USER_ID_REVERSE.get(username)
+
+
+# ---------------------------------------------------------------------------
+# 路由 — 个人中心
+# ---------------------------------------------------------------------------
+
+
+@app.route("/profile")
+def profile():
+    """个人中心页面。
+
+    从 URL 参数获取 user_id，展示该用户的完整信息（邮箱、手机、余额）。
+    不验证当前登录用户和查询的 user_id 是否匹配。
+    """
+    error = None
+    try:
+        user_id = int(request.args.get("user_id", 0))
+    except (TypeError, ValueError):
+        user_id = 0
+
+    username, user_data = get_user_by_id(user_id)
+
+    if not username or not user_data:
+        error = "用户不存在"
+        return render_template("profile.html", error=error, profile_user=None, user_id=None)
+
+    profile_user = {
+        "id": user_id,
+        "username": user_data.get("username"),
+        "email": user_data.get("email"),
+        "phone": user_data.get("phone"),
+        "balance": mask_balance(user_data.get("balance", 0)),
+    }
+
+    return render_template(
+        "profile.html",
+        profile_user=profile_user,
+        user_id=user_id,
+        error=error,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 路由 — 充值
+# ---------------------------------------------------------------------------
+
+
+@app.route("/recharge", methods=["POST"])
+@login_required
+def recharge():
+    """充值接口。
+
+    从表单接收 user_id 和 amount 参数，
+    直接修改用户数据中的余额字段（不做正负校验）。
+    """
+    try:
+        user_id = int(request.form.get("user_id", 0))
+        amount = float(request.form.get("amount", 0))
+    except (TypeError, ValueError):
+        user_id = 0
+        amount = 0
+
+    username, user_data = get_user_by_id(user_id)
+
+    if not username or not user_data:
+        return redirect(url_for("profile", user_id=user_id))
+
+    # 直接修改余额，不做正负校验
+    user_data["balance"] = user_data.get("balance", 0) + amount
+    print(f"[RECHARGE] 用户 {username} 充值 {amount}，余额变为 {user_data['balance']}")
+
+    return redirect(url_for("profile", user_id=user_id))
 
 
 # ---------------------------------------------------------------------------
