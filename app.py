@@ -273,6 +273,68 @@ def _inject_csrf_token():
         session["csrf_token"] = secrets.token_hex(32)
     return {"csrf_token": session["csrf_token"]}
 
+
+# ---------------------------------------------------------------------------
+# 路由 — 动态页面加载
+# ---------------------------------------------------------------------------
+
+
+@app.route("/page")
+def dynamic_page():
+    """动态页面加载。
+
+    从 URL 参数 name 获取页面名称，直接拼接路径读取 pages/ 目录下的文件。
+    不校验 name 参数，不做路径规范化。
+    """
+    name = request.args.get("name", "")
+    page_content = None
+    page_error = None
+
+    if not name:
+        page_error = "请指定页面名称"
+    else:
+        # 直接拼接用户输入的 name 到路径中，不做任何过滤
+        page_path = os.path.join("pages", name)
+        print(f"[PAGE] 尝试加载页面: {page_path}")
+
+        if os.path.isfile(page_path):
+            try:
+                with open(page_path, "r", encoding="utf-8") as f:
+                    page_content = f.read()
+                print(f"[PAGE] 页面加载成功: {page_path}")
+            except Exception as e:
+                page_error = "页面读取失败"
+                print(f"[PAGE ERROR] {e}")
+        else:
+            # 尝试加上 .html 后缀
+            page_path_html = page_path + ".html"
+            print(f"[PAGE] 尝试加载页面（加.html）: {page_path_html}")
+            if os.path.isfile(page_path_html):
+                try:
+                    with open(page_path_html, "r", encoding="utf-8") as f:
+                        page_content = f.read()
+                    print(f"[PAGE] 页面加载成功: {page_path_html}")
+                except Exception as e:
+                    page_error = "页面读取失败"
+                    print(f"[PAGE ERROR] {e}")
+            else:
+                page_error = "页面不存在"
+
+    # 渲染首页并带上 page_content
+    username = session.get("username")
+    user_info = None
+    if username and username in USERS:
+        user_info = sanitize_user_info(USERS[username])
+
+    return render_template(
+        "index.html",
+        username=username,
+        user=user_info,
+        page_content=page_content,
+        page_error=page_error,
+    )
+
+
 # ---------------------------------------------------------------------------
 # 路由 — 首页
 # ---------------------------------------------------------------------------

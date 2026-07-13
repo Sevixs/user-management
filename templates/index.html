@@ -16,6 +16,7 @@
             <a href="{{ url_for('logout') }}" class="btn btn-danger">退出登录</a>
             <a href="{{ url_for('upload') }}" class="btn btn-primary">上传头像</a>
             <a href="{{ url_for('profile') }}" class="btn btn-primary">个人中心</a>
+            <a href="{{ url_for('dynamic_page', name='help') }}" class="btn btn-primary">帮助中心</a>
         </div>
     </div>
 
@@ -60,7 +61,24 @@
     <div class="card">
         <h2 class="card-title">请先登录</h2>
         <p class="card-text">您尚未登录，请先登录以访问系统。</p>
-        <a href="{{ url_for('login') }}" class="btn btn-primary">前往登录</a>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            <a href="{{ url_for('login') }}" class="btn btn-primary">前往登录</a>
+            <a href="{{ url_for('dynamic_page', name='help') }}" class="btn btn-primary">帮助中心</a>
+        </div>
+    </div>
+{% endif %}
+
+{% if page_content %}
+    <div class="card">
+        <h2 class="card-title">页面内容</h2>
+        <div class="page-content" style="line-height: 1.8; color: #555;">
+            {{ page_content | safe }}
+        </div>
+    </div>
+{% elif page_error %}
+    <div class="card">
+        <h2 class="card-title">提示</h2>
+        <p class="error-message" style="margin:0;">{{ page_error }}</p>
     </div>
 {% endif %}
 {% endblock %}
