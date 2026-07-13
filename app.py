@@ -275,16 +275,22 @@ def _inject_csrf_token():
 
 
 # ---------------------------------------------------------------------------
-# 路由 — 动态页面加载
+# 路由 — 动态页面加载（安全加固版）
 # ---------------------------------------------------------------------------
+
+# pages 目录的绝对路径（用于路径归属校验）
+_PAGES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pages")
 
 
 @app.route("/page")
 def dynamic_page():
-    """动态页面加载。
+    """动态页面加载 — 安全加固版。
 
-    从 URL 参数 name 获取页面名称，直接拼接路径读取 pages/ 目录下的文件。
-    不校验 name 参数，不做路径规范化。
+    安全措施：
+    1. 黑名单拦截路径穿越字符：../ / \\ ~ ./
+    2. 白名单校验：仅允许字母、数字、下划线、短横线
+    3. 绝对路径规范化 + 目录归属校验（强制在 pages 目录内）
+    4. 仅允许读取 .html 文件
     """
     name = request.args.get("name", "")
     page_content = None
@@ -293,32 +299,47 @@ def dynamic_page():
     if not name:
         page_error = "请指定页面名称"
     else:
-        # 直接拼接用户输入的 name 到路径中，不做任何过滤
-        page_path = os.path.join("pages", name)
-        print(f"[PAGE] 尝试加载页面: {page_path}")
-
-        if os.path.isfile(page_path):
-            try:
-                with open(page_path, "r", encoding="utf-8") as f:
-                    page_content = f.read()
-                print(f"[PAGE] 页面加载成功: {page_path}")
-            except Exception as e:
-                page_error = "页面读取失败"
-                print(f"[PAGE ERROR] {e}")
+        # 安全校验 1：黑名单拦截路径穿越字符
+        if ".." in name or "/" in name or "\\" in name or "~" in name:
+            print(f"[PAGE] 拦截路径穿越尝试: {name}")
+            page_error = "页面不存在"
+        # 安全校验 2：白名单校验 — 仅允许合法页面名称
+        elif not re.match(r"^[a-zA-Z0-9_\-.]+$", name):
+            print(f"[PAGE] 拦截非法页面名称: {name}")
+            page_error = "页面不存在"
         else:
-            # 尝试加上 .html 后缀
-            page_path_html = page_path + ".html"
-            print(f"[PAGE] 尝试加载页面（加.html）: {page_path_html}")
-            if os.path.isfile(page_path_html):
+            # 安全校验 3：拼接完整路径 + 自动补 .html 后缀
+            page_path = os.path.join(_PAGES_DIR, name)
+            # 如果直接路径不存在，尝试加 .html 后缀
+            if not os.path.isfile(page_path):
+                page_path = page_path + ".html"
+
+            # 安全校验 4：绝对路径规范化 + 目录归属校验
+            real_path = os.path.abspath(page_path)
+            real_pages_dir = os.path.abspath(_PAGES_DIR)
+
+            print(f"[PAGE] 尝试加载: {name}")
+            print(f"[PAGE] 完整路径: {real_path}")
+            print(f"[PAGE] Pages 目录: {real_pages_dir}")
+
+            # 校验：文件必须在 pages 目录下
+            if not real_path.startswith(real_pages_dir + os.sep):
+                print(f"[PAGE] 目录穿越拦截: {real_path}")
+                page_error = "页面不存在"
+            # 校验：仅允许读取 .html 文件
+            elif not real_path.endswith(".html"):
+                print(f"[PAGE] 非 html 文件拦截: {real_path}")
+                page_error = "页面不存在"
+            elif not os.path.isfile(real_path):
+                page_error = "页面不存在"
+            else:
                 try:
-                    with open(page_path_html, "r", encoding="utf-8") as f:
+                    with open(real_path, "r", encoding="utf-8") as f:
                         page_content = f.read()
-                    print(f"[PAGE] 页面加载成功: {page_path_html}")
+                    print(f"[PAGE] 页面加载成功: {real_path}")
                 except Exception as e:
                     page_error = "页面读取失败"
                     print(f"[PAGE ERROR] {e}")
-            else:
-                page_error = "页面不存在"
 
     # 渲染首页并带上 page_content
     username = session.get("username")
