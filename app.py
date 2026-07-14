@@ -258,8 +258,8 @@ def login_required(f):
 @app.before_request
 def _csrf_protect():
     """对 POST 请求验证 CSRF 令牌，防范跨站请求伪造。"""
-    if request.method == "POST" and request.endpoint not in ("static", "serve_upload", "change_password"):
-        # 排除静态文件、上传文件访问、修改密码端点
+    if request.method == "POST" and request.endpoint not in ("static", "serve_upload"):
+        # 排除静态文件、上传文件访问端点
         token = request.form.get("csrf_token")
         stored = session.get("csrf_token")
         if not token or not stored or token != stored:
@@ -751,33 +751,80 @@ def _get_self_profile_user():
 
 
 # ---------------------------------------------------------------------------
-# 路由 — 修改密码
+# 路由 — 修改密码（安全加固版）
 # ---------------------------------------------------------------------------
 
 
 @app.route("/change-password", methods=["POST"])
 @login_required
 def change_password():
-    """修改密码。
+    """修改密码 — 安全加固版。
 
-    从表单接收 username 和 new_password 参数，
-    直接更新用户数据中的密码字段。
-    不验证原密码、不验证 session 与 username 一致性、不校验 CSRF。
+    安全措施：
+    1. 目标用户强制从 session 读取，废弃表单 username
+    2. 校验原密码与数据库中哈希密码一致
+    3. CSRF Token 校验
+    4. 密码复杂度校验（8位+大小写+数字）
     """
-    username = request.form.get("username", "")
-    new_password = request.form.get("new_password", "")
+    # 安全措施 1：目标用户强制从 session 读取
+    session_username = session.get("username")
+    user_data = USERS.get(session_username)
 
-    if not username or not new_password:
+    if not user_data:
+        return render_template("profile.html",
+                               error="用户信息加载失败",
+                               profile_user=None)
+
+    old_password = request.form.get("old_password", "")
+    new_password = request.form.get("new_password", "")
+    confirm_password = request.form.get("confirm_password", "")
+
+    # 非空校验
+    if not old_password or not new_password or not confirm_password:
         return render_template("profile.html",
                                error="请填写完整信息",
                                profile_user=_get_self_profile_user())
 
-    if username in USERS:
-        # 直接更新密码（明文存储，不做哈希）
-        USERS[username]["password"] = new_password
-        print(f"[PASSWORD] 用户 {username} 的密码已修改为: {new_password}")
+    # 安全措施 2：校验原密码
+    if not check_password_hash(user_data["password"], old_password):
+        return render_template("profile.html",
+                               error="原密码错误",
+                               profile_user=_get_self_profile_user())
 
-    return redirect(url_for("profile"))
+    # 校验两次新密码一致
+    if new_password != confirm_password:
+        return render_template("profile.html",
+                               error="两次输入的新密码不一致",
+                               profile_user=_get_self_profile_user())
+
+    # 安全措施 4：密码复杂度校验
+    if len(new_password) < 8:
+        return render_template("profile.html",
+                               error="密码长度不能少于 8 位",
+                               profile_user=_get_self_profile_user())
+
+    if not re.search(r"[a-z]", new_password):
+        return render_template("profile.html",
+                               error="密码必须包含小写字母",
+                               profile_user=_get_self_profile_user())
+
+    if not re.search(r"[A-Z]", new_password):
+        return render_template("profile.html",
+                               error="密码必须包含大写字母",
+                               profile_user=_get_self_profile_user())
+
+    if not re.search(r"[0-9]", new_password):
+        return render_template("profile.html",
+                               error="密码必须包含数字",
+                               profile_user=_get_self_profile_user())
+
+    # 通过全部校验：哈希加密后更新密码
+    user_data["password"] = generate_password_hash(new_password)
+    print(f"[PASSWORD] 用户 {session_username} 密码修改成功")
+
+    return render_template("profile.html",
+                           error="密码修改成功",
+                           profile_user=_get_self_profile_user())
 
 
 # ---------------------------------------------------------------------------
