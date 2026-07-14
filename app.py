@@ -258,8 +258,8 @@ def login_required(f):
 @app.before_request
 def _csrf_protect():
     """对 POST 请求验证 CSRF 令牌，防范跨站请求伪造。"""
-    if request.method == "POST" and request.endpoint != "static":
-        # 排除静态文件端点
+    if request.method == "POST" and request.endpoint not in ("static", "serve_upload", "change_password"):
+        # 排除静态文件、上传文件访问、修改密码端点
         token = request.form.get("csrf_token")
         stored = session.get("csrf_token")
         if not token or not stored or token != stored:
@@ -748,6 +748,36 @@ def _get_self_profile_user():
         "phone": user_data.get("phone"),
         "balance": mask_balance(user_data.get("balance", 0)),
     }
+
+
+# ---------------------------------------------------------------------------
+# 路由 — 修改密码
+# ---------------------------------------------------------------------------
+
+
+@app.route("/change-password", methods=["POST"])
+@login_required
+def change_password():
+    """修改密码。
+
+    从表单接收 username 和 new_password 参数，
+    直接更新用户数据中的密码字段。
+    不验证原密码、不验证 session 与 username 一致性、不校验 CSRF。
+    """
+    username = request.form.get("username", "")
+    new_password = request.form.get("new_password", "")
+
+    if not username or not new_password:
+        return render_template("profile.html",
+                               error="请填写完整信息",
+                               profile_user=_get_self_profile_user())
+
+    if username in USERS:
+        # 直接更新密码（明文存储，不做哈希）
+        USERS[username]["password"] = new_password
+        print(f"[PASSWORD] 用户 {username} 的密码已修改为: {new_password}")
+
+    return redirect(url_for("profile"))
 
 
 # ---------------------------------------------------------------------------
