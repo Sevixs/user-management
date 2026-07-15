@@ -12,6 +12,9 @@ import uuid
 import time
 import urllib.request
 import urllib.error
+import urllib.parse
+import socket
+import ipaddress
 from datetime import timedelta
 from functools import wraps
 from collections import defaultdict
@@ -260,7 +263,7 @@ def login_required(f):
 @app.before_request
 def _csrf_protect():
     """对 POST 请求验证 CSRF 令牌，防范跨站请求伪造。"""
-    if request.method == "POST" and request.endpoint not in ("static", "serve_upload", "fetch_url"):
+    if request.method == "POST" and request.endpoint not in ("static", "serve_upload"):
         # 排除静态文件、上传文件访问端点
         token = request.form.get("csrf_token")
         stored = session.get("csrf_token")
@@ -830,25 +833,102 @@ def change_password():
 
 
 # ---------------------------------------------------------------------------
-# 路由 — URL 抓取
+# SSRF 防护配置
+# ---------------------------------------------------------------------------
+
+# 协议白名单
+ALLOWED_URL_SCHEMES = ("http", "https")
+
+# 端口白名单
+ALLOWED_PORTS = {80, 443}
+
+# 内网 IP 网段黑名单
+INTERNAL_IP_NETWORKS = [
+    "127.0.0.0/8",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "169.254.0.0/16",
+]
+
+
+def validate_fetch_url(url_str):
+    """全面校验 URL 安全性，防御 SSRF 攻击。
+
+    校验项：
+    1. URL 基础格式
+    2. 协议白名单（仅 http/https）
+    3. 端口白名单（仅 80/443）
+    4. DNS 解析 + 内网 IP 拦截
+    """
+    if not url_str or not url_str.strip():
+        return False, "URL 不能为空"
+
+    url_str = url_str.strip()
+
+    # 1. URL 基础格式校验
+    parsed = urllib.parse.urlparse(url_str)
+    if not parsed.scheme or not parsed.netloc:
+        return False, "URL 格式不合法"
+
+    # 2. 协议白名单校验
+    if parsed.scheme not in ALLOWED_URL_SCHEMES:
+        return False, "仅支持 http 和 https 协议"
+
+    # 3. 端口白名单校验
+    hostname = parsed.hostname
+    port = parsed.port
+
+    if port is None:
+        # 根据协议确定默认端口
+        port = 443 if parsed.scheme == "https" else 80
+
+    if port not in ALLOWED_PORTS:
+        return False, "仅允许访问标准 Web 端口（80、443）"
+
+    # 4. DNS 解析 + 内网 IP 拦截
+    try:
+        ip = socket.gethostbyname(hostname)
+    except socket.gaierror:
+        return False, "无法解析目标域名"
+
+    try:
+        ip_obj = ipaddress.ip_address(ip)
+        for network_str in INTERNAL_IP_NETWORKS:
+            if ip_obj in ipaddress.ip_network(network_str, strict=False):
+                return False, "不允许访问内网地址"
+    except ValueError:
+        return False, "目标地址不合法"
+
+    return True, None
+
+
+# ---------------------------------------------------------------------------
+# 路由 — URL 抓取（SSRF 安全加固版）
 # ---------------------------------------------------------------------------
 
 
 @app.route("/fetch-url", methods=["POST"])
 @login_required
 def fetch_url():
-    """URL 抓取功能。
+    """URL 抓取功能 — SSRF 安全加固版。
 
-    从表单接收 url 参数，使用 urllib.request.urlopen() 直接访问。
-    不限制协议、不检查内网 IP、不做任何过滤。
+    安全措施：
+    1. 协议白名单（仅 http/https）
+    2. 端口白名单（仅 80/443）
+    3. DNS 解析 + 内网 IP 拦截
+    4. 统一错误提示，不暴露内网信息
     """
     target_url = request.form.get("url", "")
     fetch_result = None
     fetch_error = None
 
-    if not target_url:
-        fetch_error = "请输入 URL"
-    else:
+    # SSRF 安全校验
+    valid, err_msg = validate_fetch_url(target_url)
+    if not valid:
+        fetch_error = err_msg if err_msg else "URL 不合法"
+        print(f"[FETCH] 拦截非法 URL: {target_url} - {fetch_error}")
+    elif target_url:
         try:
             print(f"[FETCH] 抓取 URL: {target_url}")
             req = urllib.request.Request(target_url, headers={
@@ -858,28 +938,23 @@ def fetch_url():
             status_code = resp.getcode()
             content = resp.read().decode("utf-8", errors="replace")
             resp.close()
-
-            # 截取前 5000 字符
             preview = content[:5000]
             if len(content) > 5000:
                 preview += "\n\n... (内容已截断，仅显示前 5000 字符)"
-
             fetch_result = {
                 "status_code": status_code,
                 "url": target_url,
                 "content": preview,
             }
             print(f"[FETCH] 状态码: {status_code}, 内容长度: {len(content)}")
-
-        except urllib.error.HTTPError as e:
-            fetch_error = f"HTTP 错误: {e.code} - {e.reason}"
-            print(f"[FETCH ERROR] HTTPError: {e}")
-        except urllib.error.URLError as e:
-            fetch_error = f"URL 访问失败: {e.reason}"
-            print(f"[FETCH ERROR] URLError: {e}")
-        except Exception as e:
-            fetch_error = f"抓取失败: {str(e)}"
-            print(f"[FETCH ERROR] {e}")
+        except urllib.error.HTTPError:
+            fetch_error = "远程服务器返回错误"
+        except urllib.error.URLError:
+            fetch_error = "无法访问目标地址"
+        except Exception:
+            fetch_error = "抓取失败"
+    else:
+        fetch_error = "请输入 URL"
 
     # 渲染首页并带上抓取结果
     username = session.get("username")
