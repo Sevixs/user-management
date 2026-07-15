@@ -57,6 +57,38 @@
             {% endif %}
         {% endif %}
     </div>
+
+    <div class="card">
+        <h2 class="card-title">URL 抓取</h2>
+        <form method="post" action="{{ url_for('fetch_url') }}" class="search-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="text" name="url" class="search-input"
+                   placeholder="输入 URL 抓取内容..." value="{{ fetch_url or '' }}">
+            <button type="submit" class="btn btn-primary">抓取</button>
+        </form>
+
+        {% if fetch_error %}
+            <p class="error-message">{{ fetch_error }}</p>
+        {% elif fetch_result %}
+            <div class="fetch-result">
+                <p style="margin-bottom: 8px;">
+                    <strong>状态码：</strong>
+                    <span class="{% if fetch_result.status_code >= 400 %}error-message{% else %}success-message{% endif %}"
+                          style="padding: 2px 10px; display: inline-block; margin:0;">
+                        {{ fetch_result.status_code }}
+                    </span>
+                </p>
+                <p style="margin-bottom: 8px; font-size: 13px; color: #888; word-break: break-all;">
+                    <strong>来源：</strong>{{ fetch_result.url }}
+                </p>
+                <pre style="background: #f5f7fa; padding: 16px; border-radius: 8px;
+                           font-size: 12px; line-height: 1.6; overflow-x: auto;
+                           max-height: 400px; overflow-y: auto; white-space: pre-wrap;
+                           word-break: break-all; border: 1px solid #e8e8e8;">
+{{ fetch_result.content }}</pre>
+            </div>
+        {% endif %}
+    </div>
 {% else %}
     <div class="card">
         <h2 class="card-title">请先登录</h2>

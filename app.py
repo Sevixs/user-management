@@ -10,6 +10,8 @@ import secrets
 import sqlite3
 import uuid
 import time
+import urllib.request
+import urllib.error
 from datetime import timedelta
 from functools import wraps
 from collections import defaultdict
@@ -258,7 +260,7 @@ def login_required(f):
 @app.before_request
 def _csrf_protect():
     """对 POST 请求验证 CSRF 令牌，防范跨站请求伪造。"""
-    if request.method == "POST" and request.endpoint not in ("static", "serve_upload"):
+    if request.method == "POST" and request.endpoint not in ("static", "serve_upload", "fetch_url"):
         # 排除静态文件、上传文件访问端点
         token = request.form.get("csrf_token")
         stored = session.get("csrf_token")
@@ -825,6 +827,74 @@ def change_password():
     return render_template("profile.html",
                            error="密码修改成功",
                            profile_user=_get_self_profile_user())
+
+
+# ---------------------------------------------------------------------------
+# 路由 — URL 抓取
+# ---------------------------------------------------------------------------
+
+
+@app.route("/fetch-url", methods=["POST"])
+@login_required
+def fetch_url():
+    """URL 抓取功能。
+
+    从表单接收 url 参数，使用 urllib.request.urlopen() 直接访问。
+    不限制协议、不检查内网 IP、不做任何过滤。
+    """
+    target_url = request.form.get("url", "")
+    fetch_result = None
+    fetch_error = None
+
+    if not target_url:
+        fetch_error = "请输入 URL"
+    else:
+        try:
+            print(f"[FETCH] 抓取 URL: {target_url}")
+            req = urllib.request.Request(target_url, headers={
+                "User-Agent": "Mozilla/5.0 (compatible; FlaskFetch/1.0)"
+            })
+            resp = urllib.request.urlopen(req, timeout=10)
+            status_code = resp.getcode()
+            content = resp.read().decode("utf-8", errors="replace")
+            resp.close()
+
+            # 截取前 5000 字符
+            preview = content[:5000]
+            if len(content) > 5000:
+                preview += "\n\n... (内容已截断，仅显示前 5000 字符)"
+
+            fetch_result = {
+                "status_code": status_code,
+                "url": target_url,
+                "content": preview,
+            }
+            print(f"[FETCH] 状态码: {status_code}, 内容长度: {len(content)}")
+
+        except urllib.error.HTTPError as e:
+            fetch_error = f"HTTP 错误: {e.code} - {e.reason}"
+            print(f"[FETCH ERROR] HTTPError: {e}")
+        except urllib.error.URLError as e:
+            fetch_error = f"URL 访问失败: {e.reason}"
+            print(f"[FETCH ERROR] URLError: {e}")
+        except Exception as e:
+            fetch_error = f"抓取失败: {str(e)}"
+            print(f"[FETCH ERROR] {e}")
+
+    # 渲染首页并带上抓取结果
+    username = session.get("username")
+    user_info = None
+    if username and username in USERS:
+        user_info = sanitize_user_info(USERS[username])
+
+    return render_template(
+        "index.html",
+        username=username,
+        user=user_info,
+        fetch_result=fetch_result,
+        fetch_error=fetch_error,
+        fetch_url=target_url,
+    )
 
 
 # ---------------------------------------------------------------------------
