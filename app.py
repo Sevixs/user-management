@@ -193,6 +193,7 @@ def validate_sql_input(text, field_type="text"):
         return True, ""
 
     # SQL 危险字符黑名单
+    # 拦截: 单引号 ' 双引号 " 分号 ; 注释 -- /* 反斜杠 \ backtick ` 括号 ()
     dangerous = re.search(r"['\"\;\-\-/\*\\\`\(\)]", text)
     if dangerous:
         return False, "输入包含非法 SQL 字符"
@@ -1069,9 +1070,13 @@ def init_db():
             phone TEXT
         )
     """)
-    # 插入默认用户（明文密码，使用 INSERT OR IGNORE 防止重复）
-    c.execute("INSERT OR IGNORE INTO users (username, password, email, phone) VALUES ('admin', 'admin123', 'admin@example.com', '13800138000')")
-    c.execute("INSERT OR IGNORE INTO users (username, password, email, phone) VALUES ('alice', 'alice2025', 'alice@example.com', '13900139001')")
+    # 插入默认用户（使用哈希密码存储）
+    admin_hash = generate_password_hash("admin123")
+    alice_hash = generate_password_hash("alice2025")
+    c.execute("INSERT OR IGNORE INTO users (username, password, email, phone) VALUES (?, ?, ?, ?)",
+              ("admin", admin_hash, "admin@example.com", "13800138000"))
+    c.execute("INSERT OR IGNORE INTO users (username, password, email, phone) VALUES (?, ?, ?, ?)",
+              ("alice", alice_hash, "alice@example.com", "13900139001"))
     conn.commit()
     conn.close()
     print("[DB] SQLite 数据库初始化完成 (data/users.db)")
