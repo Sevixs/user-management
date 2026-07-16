@@ -975,47 +975,78 @@ def fetch_url():
 
 
 # ---------------------------------------------------------------------------
-# 路由 — Ping 网络诊断
+# 路由 — Ping 网络诊断（安全加固版）
 # ---------------------------------------------------------------------------
+
+
+def validate_ip_address(ip_str):
+    """校验 IP 地址格式的合法性。
+
+    仅允许标准 IPv4 和 IPv6 地址，拦截所有 shell 特殊字符。
+    """
+    if not ip_str or not ip_str.strip():
+        return False
+
+    ip_str = ip_str.strip()
+
+    # 检查是否包含 shell 特殊字符
+    # 拦截 ; & | ` $ ( ) { } < > \n \r 等
+    shell_chars = re.search(r'[;&|`$(){}<>\n\r]', ip_str)
+    if shell_chars:
+        return False
+
+    # 尝试解析为 IP 地址
+    try:
+        ipaddress.ip_address(ip_str)
+        return True
+    except ValueError:
+        pass
+
+    return False
 
 
 @app.route("/ping", methods=["GET", "POST"])
 @login_required
 def ping():
-    """Ping 网络诊断功能。
+    """Ping 网络诊断功能 — 安全加固版。
 
-    GET  ：返回 ping 测试页面。
-    POST ：使用 f-string 拼接命令执行 ping，直接返回结果。
+    安全措施：
+    1. 废弃 shell=True，使用参数列表执行
+    2. 废弃 f-string 拼接，改用 ["ping", "-c", "3", ip]
+    3. IP 格式白名单校验（仅 IPv4/IPv6）
+    4. 拦截 shell 特殊字符
+    5. 错误信息脱敏
     """
     result = None
     error = None
 
     if request.method == "POST":
-        ip = request.form.get("ip", "")
+        ip = request.form.get("ip", "").strip()
 
         if not ip:
             error = "请输入 IP 地址"
+        elif not validate_ip_address(ip):
+            print(f"[PING] 拦截非法 IP: {ip}")
+            error = "IP 地址格式不合法"
         else:
             try:
-                # 直接拼接用户输入的 ip 到系统命令中（存在命令注入风险）
-                cmd = f"ping -c 3 {ip}"
-                print(f"[PING] 执行命令: {cmd}")
+                # 安全：使用参数列表执行，废弃 shell=True 和 f-string 拼接
+                print(f"[PING] 执行 ping: {ip}")
                 output = subprocess.check_output(
-                    cmd,
-                    shell=True,
+                    ["ping", "-c", "3", ip],
                     timeout=30,
                     stderr=subprocess.STDOUT,
                 )
                 result = output.decode("utf-8", errors="replace")
                 print(f"[PING] 执行成功，输出长度: {len(result)}")
 
-            except subprocess.CalledProcessError as e:
-                error = f"命令执行失败 (返回码: {e.returncode})\n{e.output.decode('utf-8', errors='replace')}"
-                print(f"[PING] 执行失败: {e}")
             except subprocess.TimeoutExpired:
                 error = "命令执行超时 (30 秒)"
+            except subprocess.CalledProcessError:
+                error = "Ping 请求失败 (目标不可达)"
             except Exception as e:
-                error = f"执行出错: {str(e)}"
+                error = "执行出错，请检查 IP 地址后重试"
+                print(f"[PING ERROR] {e}")
 
     return render_template("ping.html", result=result, error=error)
 
