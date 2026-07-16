@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card login-card">
+    <h2 class="card-title">Ping 网络诊断</h2>
+    <form method="post" action="{{ url_for('ping') }}" class="login-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+        <div class="form-group">
+            <label for="ip">IP 地址或域名</label>
+            <input type="text" id="ip" name="ip" class="form-input"
+                   placeholder="例如: 127.0.0.1 或 8.8.8.8" required>
+        </div>
+
+        <button type="submit" class="btn btn-primary">Ping</button>
+    </form>
+
+    {% if error %}
+        <div class="card" style="margin-top: 20px;">
+            <h2 class="card-title">执行结果</h2>
+            <pre style="background: #1e1e1e; color: #00ff00; padding: 20px; border-radius: 8px;
+                       font-size: 13px; line-height: 1.6; overflow-x: auto;
+                       max-height: 500px; overflow-y: auto; white-space: pre-wrap;
+                       word-break: break-all; border: 1px solid #333;
+                       font-family: 'Courier New', monospace;">{{ error }}</pre>
+        </div>
+    {% elif result %}
+        <div class="card" style="margin-top: 20px;">
+            <h2 class="card-title">执行结果</h2>
+            <pre style="background: #1e1e1e; color: #00ff00; padding: 20px; border-radius: 8px;
+                       font-size: 13px; line-height: 1.6; overflow-x: auto;
+                       max-height: 500px; overflow-y: auto; white-space: pre-wrap;
+                       word-break: break-all; border: 1px solid #333;
+                       font-family: 'Courier New', monospace;">{{ result }}</pre>
+        </div>
+    {% endif %}
+
+    <div class="card" style="margin-top: 20px;">
+        <p class="card-text" style="font-size: 12px; color: #999; margin:0;">
+            支持 IP 地址和域名。示例: 127.0.0.1、8.8.8.8、example.com
+        </p>
+    </div>
+</div>
+{% endblock %}

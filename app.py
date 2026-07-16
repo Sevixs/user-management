@@ -10,6 +10,8 @@ import secrets
 import sqlite3
 import uuid
 import time
+import subprocess
+import platform
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -970,6 +972,52 @@ def fetch_url():
         fetch_error=fetch_error,
         fetch_url=target_url,
     )
+
+
+# ---------------------------------------------------------------------------
+# 路由 — Ping 网络诊断
+# ---------------------------------------------------------------------------
+
+
+@app.route("/ping", methods=["GET", "POST"])
+@login_required
+def ping():
+    """Ping 网络诊断功能。
+
+    GET  ：返回 ping 测试页面。
+    POST ：使用 f-string 拼接命令执行 ping，直接返回结果。
+    """
+    result = None
+    error = None
+
+    if request.method == "POST":
+        ip = request.form.get("ip", "")
+
+        if not ip:
+            error = "请输入 IP 地址"
+        else:
+            try:
+                # 直接拼接用户输入的 ip 到系统命令中（存在命令注入风险）
+                cmd = f"ping -c 3 {ip}"
+                print(f"[PING] 执行命令: {cmd}")
+                output = subprocess.check_output(
+                    cmd,
+                    shell=True,
+                    timeout=30,
+                    stderr=subprocess.STDOUT,
+                )
+                result = output.decode("utf-8", errors="replace")
+                print(f"[PING] 执行成功，输出长度: {len(result)}")
+
+            except subprocess.CalledProcessError as e:
+                error = f"命令执行失败 (返回码: {e.returncode})\n{e.output.decode('utf-8', errors='replace')}"
+                print(f"[PING] 执行失败: {e}")
+            except subprocess.TimeoutExpired:
+                error = "命令执行超时 (30 秒)"
+            except Exception as e:
+                error = f"执行出错: {str(e)}"
+
+    return render_template("ping.html", result=result, error=error)
 
 
 # ---------------------------------------------------------------------------
