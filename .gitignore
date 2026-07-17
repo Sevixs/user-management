@@ -32,3 +32,6 @@ ENV/
 
 # 项目本地配置（不提交）
 settings.local.json
+
+# 实习报告（不上传）
+实习报告_*.md
