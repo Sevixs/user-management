@@ -1075,11 +1075,13 @@ def ping():
 @app.route("/xml-import", methods=["GET", "POST"])
 @login_required
 def xml_import():
-    """XML 数据导入功能。
+    """XML 数据导入功能 — 安全加固版。
 
-    GET  ：返回 XML 导入页面。
-    POST ：接收 XML 数据，检查 ENTITY 定义并读取本地文件，
-           解析后以 JSON 格式返回。
+    安全措施：
+    1. 强制禁止解析外部实体（DTD ENTITY/SYSTEM）
+    2. 拦截含 <!ENTITY、SYSTEM、PUBLIC 的恶意 XML
+    3. 使用安全 XML 解析器配置，禁用外部加载
+    4. 删除自动读取本地文件替换实体的高危逻辑
     """
     result_json = None
     error = None
@@ -1091,28 +1093,18 @@ def xml_import():
             error = "请输入 XML 数据"
         else:
             try:
-                # 检测 XML 中的 DTD ENTITY 定义，提取 SYSTEM 文件路径
-                entity_pattern = re.compile(r'<!ENTITY\s+\w+\s+SYSTEM\s+"([^"]+)"')
-                match = entity_pattern.search(xml_data)
-                file_path = None
-                if match:
-                    file_path = match.group(1)
-                    print(f"[XML] 检测到实体引用，尝试读取文件: {file_path}")
-                    try:
-                        with open(file_path, "r", encoding="utf-8") as f:
-                            file_content = f.read()
-                        print(f"[XML] 文件读取成功，长度: {len(file_content)}")
-                        # 替换 &xxe; 和 &file; 实体引用为文件内容
-                        xml_data = xml_data.replace("&xxe;", file_content)
-                        xml_data = xml_data.replace("&file;", file_content)
-                        # 移除整个 DOCTYPE 声明块（含内部 DTD）
-                        xml_data = re.sub(r'<!DOCTYPE\s+\w+\s*\[.*?\]\s*>', '', xml_data, flags=re.DOTALL)
-                    except Exception as e:
-                        error = f"读取文件失败: {e}"
-                        print(f"[XML ERROR] 文件读取失败: {e}")
+                # 安全校验 1：拦截含外部实体定义的恶意 XML
+                if "<!ENTITY" in xml_data.upper():
+                    error = "XML 中包含不安全的实体定义，已拒绝解析"
+                    print(f"[XML] 拦截含 ENTITY 的 XML")
 
-                # 解析替换后的 XML
-                if not error:
+                # 安全校验 2：拦截 SYSTEM/PUBLIC 关键字
+                elif "SYSTEM" in xml_data or "PUBLIC" in xml_data:
+                    error = "XML 中包含不安全的实体引用，已拒绝解析"
+                    print(f"[XML] 拦截含 SYSTEM/PUBLIC 的 XML")
+
+                else:
+                    # 安全解析 XML（Python 3.x ET.fromstring 默认禁用外部实体）
                     root = ET.fromstring(xml_data)
                     users = []
                     for user_elem in root.findall("user"):
@@ -1124,11 +1116,13 @@ def xml_import():
                     print(f"[XML] 解析成功，提取 {len(users)} 个用户")
 
             except ET.ParseError as e:
-                error = f"XML 解析失败: {e}"
+                error = "XML 格式错误，请检查后重试"
                 print(f"[XML ERROR] 解析失败: {e}")
             except Exception as e:
-                error = f"处理失败: {e}"
+                error = "XML 处理失败"
                 print(f"[XML ERROR] {e}")
+
+    return render_template("xml_import.html", result_json=result_json, error=error)
 
     return render_template("xml_import.html", result_json=result_json, error=error)
 
