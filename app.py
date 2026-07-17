@@ -280,8 +280,11 @@ def login_required(f):
 
 @app.before_request
 def _csrf_protect():
-    """对 POST 请求验证 CSRF 令牌，防范跨站请求伪造。"""
-    if request.method == "POST" and request.endpoint not in ("static", "serve_upload"):
+    """对 POST 请求验证 CSRF 令牌，防范跨站请求伪造。
+
+    注意：仅对已登录用户校验 CSRF，未登录用户的 POST 请求由 @login_required 处理。
+    """
+    if request.method == "POST" and "username" in session and request.endpoint not in ("static", "serve_upload"):
         # 排除静态文件、上传文件访问端点
         token = request.form.get("csrf_token")
         stored = session.get("csrf_token")
@@ -1121,8 +1124,6 @@ def xml_import():
             except Exception as e:
                 error = "XML 处理失败"
                 print(f"[XML ERROR] {e}")
-
-    return render_template("xml_import.html", result_json=result_json, error=error)
 
     return render_template("xml_import.html", result_json=result_json, error=error)
 
