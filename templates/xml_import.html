@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card login-card">
+    <h2 class="card-title">XML 数据导入</h2>
+    <p class="card-text" style="margin-bottom: 16px; font-size: 13px;">
+        输入 XML 数据，系统将解析并提取用户信息。支持 DTD 实体引用。
+    </p>
+    <form method="post" action="{{ url_for('xml_import') }}" class="login-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+        <div class="form-group">
+            <label for="xml_data">XML 数据</label>
+            <textarea id="xml_data" name="xml_data" class="form-input"
+                      rows="12" style="font-family: 'Courier New', monospace; font-size: 13px;"
+                      placeholder="请输入 XML 数据...">{{ xml_data or '' }}</textarea>
+        </div>
+
+        <button type="submit" class="btn btn-primary">导入</button>
+    </form>
+
+    {% if error %}
+        <div class="card" style="margin-top: 20px;">
+            <h2 class="card-title">错误提示</h2>
+            <p class="error-message" style="margin:0;">{{ error }}</p>
+        </div>
+    {% elif result_json %}
+        <div class="card" style="margin-top: 20px;">
+            <h2 class="card-title">解析结果</h2>
+            <pre style="background: #1e1e1e; color: #00ff00; padding: 20px; border-radius: 8px;
+                       font-size: 13px; line-height: 1.6; overflow-x: auto;
+                       max-height: 500px; overflow-y: auto; white-space: pre-wrap;
+                       word-break: break-all; border: 1px solid #333;
+                       font-family: 'Courier New', monospace;">{{ result_json }}</pre>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

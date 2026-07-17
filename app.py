@@ -12,6 +12,8 @@ import uuid
 import time
 import subprocess
 import platform
+import json
+import xml.etree.ElementTree as ET
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -177,6 +179,19 @@ def sanitize_input(text):
     text = str(text).strip()
     text = re.sub(r"<[^>]*>", "", text)           # 移除 HTML 标签
     text = re.sub(r"javascript\s*:", "", text, flags=re.IGNORECASE)  # 移除伪协议
+    return text
+
+
+def xml_encode(text):
+    """XML 转义特殊字符，防止插入内容破坏 XML 结构。"""
+    if not text:
+        return ""
+    text = str(text)
+    text = text.replace("&", "&amp;")
+    text = text.replace("<", "&lt;")
+    text = text.replace(">", "&gt;")
+    text = text.replace('"', "&quot;")
+    text = text.replace("'", "&apos;")
     return text
 
 
@@ -1050,6 +1065,72 @@ def ping():
                 print(f"[PING ERROR] {e}")
 
     return render_template("ping.html", result=result, error=error)
+
+
+# ---------------------------------------------------------------------------
+# 路由 — XML 数据导入
+# ---------------------------------------------------------------------------
+
+
+@app.route("/xml-import", methods=["GET", "POST"])
+@login_required
+def xml_import():
+    """XML 数据导入功能。
+
+    GET  ：返回 XML 导入页面。
+    POST ：接收 XML 数据，检查 ENTITY 定义并读取本地文件，
+           解析后以 JSON 格式返回。
+    """
+    result_json = None
+    error = None
+
+    if request.method == "POST":
+        xml_data = request.form.get("xml_data", "")
+
+        if not xml_data.strip():
+            error = "请输入 XML 数据"
+        else:
+            try:
+                # 检测 XML 中的 DTD ENTITY 定义，提取 SYSTEM 文件路径
+                entity_pattern = re.compile(r'<!ENTITY\s+\w+\s+SYSTEM\s+"([^"]+)"')
+                match = entity_pattern.search(xml_data)
+                file_path = None
+                if match:
+                    file_path = match.group(1)
+                    print(f"[XML] 检测到实体引用，尝试读取文件: {file_path}")
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as f:
+                            file_content = f.read()
+                        print(f"[XML] 文件读取成功，长度: {len(file_content)}")
+                        # 替换 &xxe; 和 &file; 实体引用为文件内容
+                        xml_data = xml_data.replace("&xxe;", file_content)
+                        xml_data = xml_data.replace("&file;", file_content)
+                        # 移除整个 DOCTYPE 声明块（含内部 DTD）
+                        xml_data = re.sub(r'<!DOCTYPE\s+\w+\s*\[.*?\]\s*>', '', xml_data, flags=re.DOTALL)
+                    except Exception as e:
+                        error = f"读取文件失败: {e}"
+                        print(f"[XML ERROR] 文件读取失败: {e}")
+
+                # 解析替换后的 XML
+                if not error:
+                    root = ET.fromstring(xml_data)
+                    users = []
+                    for user_elem in root.findall("user"):
+                        name = user_elem.findtext("name", "")
+                        email = user_elem.findtext("email", "")
+                        users.append({"name": name, "email": email})
+
+                    result_json = json.dumps(users, ensure_ascii=False, indent=2)
+                    print(f"[XML] 解析成功，提取 {len(users)} 个用户")
+
+            except ET.ParseError as e:
+                error = f"XML 解析失败: {e}"
+                print(f"[XML ERROR] 解析失败: {e}")
+            except Exception as e:
+                error = f"处理失败: {e}"
+                print(f"[XML ERROR] {e}")
+
+    return render_template("xml_import.html", result_json=result_json, error=error)
 
 
 # ---------------------------------------------------------------------------
